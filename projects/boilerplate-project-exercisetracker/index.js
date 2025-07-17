@@ -28,8 +28,8 @@ const exerciseSchema = new Schema({
   date: Date,
 })
 
-const User = mongoose.model('User', userSchema)
-const Exercise = mongoose.model('Exercise', exerciseSchema)
+const User = require('./models/User')
+const Exercise = require('./models/Exercise')
 
 // --- Routes ---
 
@@ -52,52 +52,52 @@ app.get('/api/users', async (req, res) => {
 
 // Add exercise
 app.post('/api/users/:_id/exercises', async (req, res) => {
-  try {
-    const user = await User.findById(req.params._id)
-    if (!user) return res.json({ error: 'User not found' })
+  const { description, duration, date } = req.body
+  const { _id } = req.params
 
-    const { description, duration, date } = req.body
+  try {
+    const user = await User.findById(_id)
+    if (!user) return res.status(400).json({ error: 'User not found' })
 
     const exercise = new Exercise({
-      userId: user._id,
+      userId: _id,
       description,
       duration: parseInt(duration),
       date: date ? new Date(date) : new Date(),
     })
 
-    const savedExercise = await exercise.save()
+    await exercise.save()
 
     res.json({
       _id: user._id,
       username: user.username,
-      date: savedExercise.date.toDateString(),
-      duration: savedExercise.duration,
-      description: savedExercise.description,
+      description: exercise.description,
+      duration: exercise.duration,
+      date: exercise.date.toDateString(),
     })
   } catch (err) {
-    res.status(500).json({ error: 'Exercise add failed.' })
+    res.status(500).json({ error: 'Server error' })
   }
 })
 
 // Get logs
 app.get('/api/users/:_id/logs', async (req, res) => {
-  try {
-    const user = await User.findById(req.params._id)
-    if (!user) return res.json({ error: 'User not found' })
+  const { from, to, limit } = req.query
+  const { _id } = req.params
 
-    let { from, to, limit } = req.query
-    let filter = { userId: req.params._id }
+  try {
+    const user = await User.findById(_id)
+    if (!user) return res.status(400).json({ error: 'User not found' })
+
+    const query = { userId: _id }
 
     if (from || to) {
-      filter.date = {}
-      if (from) filter.date.$gte = new Date(from)
-      if (to) filter.date.$lte = new Date(to)
+      query.date = {}
+      if (from) query.date.$gte = new Date(from)
+      if (to) query.date.$lte = new Date(to)
     }
 
-    let query = Exercise.find(filter).select('-_id description duration date')
-    if (limit) query.limit(parseInt(limit))
-
-    const exercises = await query.exec()
+    let exercises = await Exercise.find(query).limit(parseInt(limit) || 1000)
 
     const log = exercises.map((e) => ({
       description: e.description,
@@ -106,13 +106,13 @@ app.get('/api/users/:_id/logs', async (req, res) => {
     }))
 
     res.json({
+      _id: user._id,
       username: user.username,
       count: log.length,
-      _id: user._id,
       log,
     })
   } catch (err) {
-    res.status(500).json({ error: 'Log fetch failed.' })
+    res.status(500).json({ error: 'Server error' })
   }
 })
 
