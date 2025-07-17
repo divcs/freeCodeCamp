@@ -1,85 +1,89 @@
 require('dotenv').config()
 
-console.log(process.env.DB_URI)
-
 const express = require('express')
 const cors = require('cors')
-const app = express()
 const mongoose = require('mongoose')
 const bodyParser = require('body-parser')
 
+const app = express()
+
+// Middleware
+app.use(cors())
 app.use(bodyParser.urlencoded({ extended: false }))
 app.use(bodyParser.json())
+app.use('/public', express.static(`${process.cwd()}/public`))
 
-// Basic Configuration
-try {
-  mongoose.connect(process.env.DB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-} catch (err) {
-  console.log(err)
-}
+// MongoDB Connection
+mongoose
+  .connect(process.env.DB_URI)
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.error(err))
 
-const port = process.env.PORT || 3000
-
-// Model
-const schema = new mongoose.Schema({
+// Mongoose Schema & Model
+const urlSchema = new mongoose.Schema({
   original: { type: String, required: true },
   short: { type: Number, required: true },
 })
-const Url = mongoose.model('Url', schema)
+const Url = mongoose.model('Url', urlSchema)
 
-app.use(cors())
-
-app.use('/public', express.static(`${process.cwd()}/public`))
-
-app.get('/', function (req, res) {
+// Home Route
+app.get('/', (req, res) => {
   res.sendFile(process.cwd() + '/views/index.html')
 })
 
-// Your first API endpoint
-app.get('/api/shorturl/:input', (req, res) => {
-  const input = parseInt(req.params.input)
-
-  Url.findOne({ short: input }, function (err, data) {
-    if (err || data === null) return res.json('URL NOT FOUND')
-    return res.redirect(data.original)
-  })
-})
-
+// POST: Create Short URL
 app.post('/api/shorturl', async (req, res) => {
-  const bodyUrl = req.body.url
-  let urlRegex = new RegExp(
-    /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&\/\/=]*)/
-  )
+  const originalUrl = req.body.url
 
-  if (!bodyUrl.match(urlRegex)) {
-    return res.json({ error: 'Invalid URL' })
+  // Basic URL validation
+  const urlRegex = /^https?:\/\/[\w.-]+\.[a-z]{2,}(\/.*)?$/i
+  if (!urlRegex.test(originalUrl)) {
+    return res.json({ error: 'invalid url' })
   }
 
-  let index = 1
+  try {
+    // Check if already in DB
+    let foundUrl = await Url.findOne({ original: originalUrl })
+    if (foundUrl) {
+      return res.json({
+        original_url: foundUrl.original,
+        short_url: foundUrl.short,
+      })
+    }
 
-  Url.findOne({})
-    .sort({ short: 'desc' })
-    .exec((err, data) => {
-      if (err) return res.json({ error: 'No url found.' })
+    // Generate next short ID
+    const last = await Url.findOne().sort({ short: -1 })
+    const nextShort = last ? last.short + 1 : 1
 
-      index = data !== null ? data.short + 1 : index
+    // Save new short URL
+    const newUrl = new Url({ original: originalUrl, short: nextShort })
+    await newUrl.save()
 
-      Url.findOneAndUpdate(
-        { original: bodyUrl },
-        { original: bodyUrl, short: index },
-        { new: true, upsert: true },
-        (err, newUrl) => {
-          if (!err) {
-            res.json({ original_url: bodyUrl, short_url: newUrl.short })
-          }
-        }
-      )
+    return res.json({
+      original_url: newUrl.original,
+      short_url: newUrl.short,
     })
+  } catch (err) {
+    return res.status(500).json({ error: 'Server error' })
+  }
 })
 
-app.listen(port, function () {
+// GET: Redirect to Original URL
+app.get('/api/shorturl/:short_url', async (req, res) => {
+  const shortUrl = parseInt(req.params.short_url)
+
+  try {
+    const found = await Url.findOne({ short: shortUrl })
+    if (!found) return res.json({ error: 'No short URL found' })
+
+    return res.redirect(found.original)
+  } catch (err) {
+    return res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Start Server
+const port = process.env.PORT || 3000
+app.listen(port, () => {
   console.log(`Listening on port ${port}`)
 })
