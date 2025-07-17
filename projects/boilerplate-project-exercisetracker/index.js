@@ -59,11 +59,15 @@ app.post('/api/users/:_id/exercises', async (req, res) => {
     const user = await User.findById(_id)
     if (!user) return res.status(400).json({ error: 'User not found' })
 
+    const exerciseDate = date ? new Date(date) : new Date()
+    if (isNaN(exerciseDate.getTime()))
+      return res.json({ error: 'Invalid date' })
+
     const exercise = new Exercise({
       userId: _id,
       description,
       duration: parseInt(duration),
-      date: date ? new Date(date) : new Date(),
+      date: exerciseDate,
     })
 
     await exercise.save()
@@ -89,7 +93,7 @@ app.get('/api/users/:_id/logs', async (req, res) => {
     const user = await User.findById(_id)
     if (!user) return res.status(400).json({ error: 'User not found' })
 
-    const query = { userId: _id }
+    let query = { userId: _id }
 
     if (from || to) {
       query.date = {}
@@ -97,7 +101,9 @@ app.get('/api/users/:_id/logs', async (req, res) => {
       if (to) query.date.$lte = new Date(to)
     }
 
-    let exercises = await Exercise.find(query).limit(parseInt(limit) || 1000)
+    let exercises = await Exercise.find(query)
+      .sort({ date: 'asc' }) // ✅ sort first
+      .limit(parseInt(limit) || 0) // ✅ apply limit only if it's provided
 
     const log = exercises.map((e) => ({
       description: e.description,
