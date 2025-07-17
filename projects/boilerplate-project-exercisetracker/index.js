@@ -1,123 +1,121 @@
 const express = require('express')
-const app = express()
 const cors = require('cors')
 const mongoose = require('mongoose')
-const ObjectId = require('mongoose').Types.ObjectId
 const { Schema } = mongoose
-const bodyParser = require('body-parser')
 require('dotenv').config()
 
-app.use(bodyParser.urlencoded({ extended: false }))
-app.use(bodyParser.json())
+const app = express()
 app.use(cors())
 app.use(express.static('public'))
+app.use(express.urlencoded({ extended: false }))
+app.use(express.json())
+
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html')
 })
 
-main().catch((err) => console.log(err))
+mongoose.connect(process.env.DB_URI)
 
-async function main() {
-  await mongoose.connect(process.env.DB_URI)
-}
+// --- Mongoose Schemas ---
+const userSchema = new Schema({
+  username: { type: String, required: true, unique: true },
+})
 
-const userSchema = new Schema(
-  {
-    username: { type: String, require: true, unique: true },
-    exercises: [
-      {
-        description: String,
-        duration: Number,
-        date: Date,
-      },
-    ],
-  },
-  { versionKey: false }
-)
+const exerciseSchema = new Schema({
+  userId: { type: String, required: true },
+  description: String,
+  duration: Number,
+  date: Date,
+})
 
 const User = mongoose.model('User', userSchema)
-const ERROR = { error: 'There was an error while getting the users.' }
+const Exercise = mongoose.model('Exercise', exerciseSchema)
 
-app.get('/api/users', (req, res) => {
-  User.find({}, (err, data) => {
-    if (err) return res.send(ERROR)
-    res.json(data)
-  })
+// --- Routes ---
+
+// Create user
+app.post('/api/users', async (req, res) => {
+  try {
+    const user = new User({ username: req.body.username })
+    const savedUser = await user.save()
+    res.json({ username: savedUser.username, _id: savedUser._id })
+  } catch (err) {
+    res.status(500).json({ error: 'User creation failed.' })
+  }
 })
 
-app.get('/api/users/:id/logs', (req, res) => {
-  const id = req.params.id
-  const dateFrom = new Date(req.query.from)
-  const dateTo = new Date(req.query.to)
-  const limit = parseInt(req.query.limit)
+// Get all users
+app.get('/api/users', async (req, res) => {
+  const users = await User.find({}, '_id username')
+  res.json(users)
+})
 
-  User.findOne({ _id: new ObjectId(id) }, (err, data) => {
-    if (err) return res.send(ERROR)
+// Add exercise
+app.post('/api/users/:_id/exercises', async (req, res) => {
+  try {
+    const user = await User.findById(req.params._id)
+    if (!user) return res.json({ error: 'User not found' })
 
-    let log = []
+    const { description, duration, date } = req.body
 
-    data.exercises.filter(
-      (exercise) =>
-        new Date(Date.parse(exercise.date)).getTime() > dateFrom &&
-        new Date(Date.parse(exercise.date)).getTime() < dateTo
-    )
+    const exercise = new Exercise({
+      userId: user._id,
+      description,
+      duration: parseInt(duration),
+      date: date ? new Date(date) : new Date(),
+    })
 
-    for (const exercise of data.exercises) {
-      log.push({
-        description: exercise.description,
-        duration: exercise.duration,
-        date: new Date(exercise.date).toDateString(),
-      })
-    }
-
-    if (limit) log = log.slice(0, limit)
+    const savedExercise = await exercise.save()
 
     res.json({
-      _id: data._id,
-      username: data.username,
-      count: log.length,
-      log: log,
+      _id: user._id,
+      username: user.username,
+      date: savedExercise.date.toDateString(),
+      duration: savedExercise.duration,
+      description: savedExercise.description,
     })
-  })
-})
-
-app.post('/api/users', (req, res) => {
-  const username = req.body.username
-  User.create({ username: username }, (err, data) => {
-    if (err) return res.send(ERROR)
-    res.json({ _id: data._id, username: data.username })
-  })
-})
-
-app.post('/api/users/:id/exercises', (req, res) => {
-  const id = req.params.id
-  let { description, duration, date } = req.body
-
-  const newExercise = {
-    description: description,
-    duration: duration,
-    date: date ? new Date(date).toDateString() : new Date().toDateString(),
+  } catch (err) {
+    res.status(500).json({ error: 'Exercise add failed.' })
   }
+})
 
-  User.findOne({ _id: new ObjectId(id) }, (err, data) => {
-    if (err) return res.send(ERROR)
-    data.exercises.push(newExercise)
-    data.save((err, data) => {
-      const response = {
-        username: data.username,
-        description: data.exercises[data.exercises.length - 1].description,
-        duration: data.exercises[data.exercises.length - 1].duration,
-        date: new Date(
-          data.exercises[data.exercises.length - 1].date
-        ).toDateString(),
-        _id: data._id,
-      }
+// Get logs
+app.get('/api/users/:_id/logs', async (req, res) => {
+  try {
+    const user = await User.findById(req.params._id)
+    if (!user) return res.json({ error: 'User not found' })
 
-      res.json(response)
+    let { from, to, limit } = req.query
+    let filter = { userId: req.params._id }
+
+    if (from || to) {
+      filter.date = {}
+      if (from) filter.date.$gte = new Date(from)
+      if (to) filter.date.$lte = new Date(to)
+    }
+
+    let query = Exercise.find(filter).select('-_id description duration date')
+    if (limit) query.limit(parseInt(limit))
+
+    const exercises = await query.exec()
+
+    const log = exercises.map((e) => ({
+      description: e.description,
+      duration: e.duration,
+      date: e.date.toDateString(),
+    }))
+
+    res.json({
+      username: user.username,
+      count: log.length,
+      _id: user._id,
+      log,
     })
-  })
+  } catch (err) {
+    res.status(500).json({ error: 'Log fetch failed.' })
+  }
 })
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log('Your app is listening on port ' + listener.address().port)
+  console.log('App is listening on port ' + listener.address().port)
 })
